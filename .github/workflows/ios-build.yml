@@ -5,8 +5,8 @@ on:
 
 jobs:
   build:
-    # Utilisation de macos-13 (Ventura) qui est souvent plus stable pour les builds unsigned
-    runs-on: macos-13
+    # Utilisation de macos-latest (actuellement macOS 14/15 sur puce Apple Silicon, plus rapide)
+    runs-on: macos-latest
 
     steps:
       - name: 🏗 Setup Repo
@@ -15,7 +15,7 @@ jobs:
       - name: 🏗 Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 20
           cache: 'npm'
 
       - name: 📦 Install Dependencies
