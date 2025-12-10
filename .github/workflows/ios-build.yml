@@ -5,8 +5,8 @@ on:
 
 jobs:
   build:
-    # On force macOS 14 (Sonoma) avec Xcode 15, très stable pour Expo 50+
-    runs-on: macos-14
+    # On utilise macOS 15 (Sequoia) pour avoir Xcode 16.1+ requis par React Native
+    runs-on: macos-15
 
     steps:
       - name: 🏗 Setup Repo
