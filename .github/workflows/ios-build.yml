@@ -5,7 +5,8 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Utilisation de macos-13 (Ventura) qui est souvent plus stable pour les builds unsigned
+    runs-on: macos-13
 
     steps:
       - name: 🏗 Setup Repo
@@ -23,10 +24,15 @@ jobs:
       - name: ⚙️ Setup Expo
         run: npm install -g expo-cli
 
-      - name: 🚀 Prebuild
+      - name: 🚀 Prebuild (Generate Native iOS Code)
         run: npx expo prebuild --platform ios
 
-      - name: 🔨 Build App
+      - name: 🥥 Install Pods
+        run: |
+          cd ios
+          pod install --repo-update
+
+      - name: 🔨 Build App (xcodebuild)
         run: |
           cd ios
           xcodebuild -workspace FlowOS.xcworkspace \
@@ -34,9 +40,12 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            clean build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_IDENTITY=""
+            CODE_SIGNING_IDENTITY="" \
+            -quiet
 
       - name: 📦 Package IPA
         run: |
