@@ -1,0 +1,51 @@
+name: Build iOS IPA (Unsigned)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: 🏗 Setup Repo
+        uses: actions/checkout@v3
+
+      - name: 🏗 Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: 📦 Install Dependencies
+        run: npm install
+
+      - name: ⚙️ Setup Expo
+        run: npm install -g expo-cli
+
+      - name: 🚀 Prebuild
+        run: npx expo prebuild --platform ios --no-interactive
+
+      - name: 🔨 Build App
+        run: |
+          cd ios
+          xcodebuild -workspace FlowOS.xcworkspace \
+            -scheme FlowOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY=""
+
+      - name: 📦 Package IPA
+        run: |
+          mkdir Payload
+          mv ios/build/Build/Products/Release-iphoneos/FlowOS.app Payload/
+          zip -r FlowOS.ipa Payload
+
+      - name: 📤 Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowos-ipa
+          path: FlowOS.ipa
