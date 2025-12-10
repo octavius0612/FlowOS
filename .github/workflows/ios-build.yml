@@ -5,8 +5,8 @@ on:
 
 jobs:
   build:
-    # Utilisation de macos-latest (actuellement macOS 14/15 sur puce Apple Silicon, plus rapide)
-    runs-on: macos-latest
+    # On force macOS 14 (Sonoma) avec Xcode 15, très stable pour Expo 50+
+    runs-on: macos-14
 
     steps:
       - name: 🏗 Setup Repo
@@ -45,12 +45,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_IDENTITY="" \
-            -quiet
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ONLY_ACTIVE_ARCH=NO \
+            -allowProvisioningUpdates
 
       - name: 📦 Package IPA
         run: |
           mkdir Payload
+          # On déplace le fichier .app vers le dossier Payload
           mv ios/build/Build/Products/Release-iphoneos/FlowOS.app Payload/
+          # On compresse
           zip -r FlowOS.ipa Payload
 
       - name: 📤 Upload Artifact
