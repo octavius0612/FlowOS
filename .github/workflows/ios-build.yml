@@ -1,4 +1,4 @@
-name: Build iOS IPA (Fastlane + Diagnostics)
+name: Build iOS IPA (Manual Raw Build)
 
 on:
   workflow_dispatch:
@@ -25,81 +25,82 @@ jobs:
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios
 
-      - name: 🛠 Setup Fastlane
+      - name: 💉 Force Disable Signing in Pods
         run: |
           cd ios
-          mkdir -p fastlane
-          # Création d'un fichier de config Fastlane qui force le mode non-signé
-          cat <<EOT > fastlane/Fastfile
-          default_platform(:ios)
-          platform :ios do
-            desc "Build iOS App without signing"
-            lane :build_unsigned do
-              gym(
-                scheme: "FlowOS",
-                clean: true,
-                output_directory: "./build",
-                output_name: "FlowOS.ipa",
-                export_method: "ad-hoc",
-                skip_profile_detection: true,
-                include_bitcode: false,
-                include_symbols: false,
-                export_options: {
-                  signingStyle: "manual",
-                  provisioningProfiles: {}
-                },
-                xcargs: "CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' PROVISIONING_PROFILE_SPECIFIER=''"
-              )
-            end
-          end
-          EOT
+          # On injecte la désactivation de signature DANS le hook existant du Podfile
+          # C'est la méthode la plus chirurgicale pour éviter les conflits
+          sed -i '' '/post_install do |installer|/a\
+            installer.pods_project.targets.each do |target|\
+              target.build_configurations.each do |config|\
+                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"\
+                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"\
+                config.build_settings["CODE_SIGNING_IDENTITY"] = ""\
+                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""\
+              end\
+            end\
+          ' Podfile
 
       - name: 🥥 Install Pods
         run: |
           cd ios
           pod install --repo-update
 
-      - name: 🔨 Build with Fastlane & Capture Logs
+      - name: 🔨 Raw Build (No Export) & Capture All Logs
         id: build_step
         run: |
           cd ios
-          # On lance Fastlane et on enregistre TOUT dans un fichier log
+          # On utilise 'build' au lieu de 'archive' pour éviter les checks de signature d'export
+          # On capture stderr (2) et stdout (1) pour ne rien rater
           set -o pipefail
-          bundle exec fastlane build_unsigned | tee fastlane_build.log
+          xcodebuild \
+            -workspace FlowOS.xcworkspace \
+            -scheme FlowOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY="" \
+            build \
+            2>&1 | tee raw_build.log
 
-      # --- SECTION SUCCÈS ---
-      
-      - name: 📦 Check IPA (Si succès)
+      - name: 📦 Manually Package IPA
         if: success()
         run: |
-          if [ ! -f "ios/build/FlowOS.ipa" ]; then
-            echo "ERREUR: IPA non trouvé malgré le succès de Fastlane !"
+          cd ios
+          mkdir Payload
+          # On va chercher l'application compilée dans le dossier derivedData
+          APP_SOURCE=$(find build/Build/Products/Release-iphoneos -name "FlowOS.app" | head -n 1)
+          
+          if [ -z "$APP_SOURCE" ]; then
+            echo "ERREUR CRITIQUE: Le fichier .app n'a pas été créé malgré le succès apparent."
             exit 1
           fi
+          
+          cp -R "$APP_SOURCE" Payload/
+          zip -r FlowOS.ipa Payload
 
       - name: 📤 Upload IPA (Si succès)
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: flowos-ipa
-          path: ios/build/FlowOS.ipa
+          path: ios/FlowOS.ipa
 
-      # --- SECTION DIAGNOSTIC (SI ÉCHEC) ---
-
-      - name: 🔍 Generate Error Report (Si échec)
+      - name: 🔍 Generate Full Error Report (Si échec)
         if: failure()
         run: |
-          echo "=== RAPPORT D'ERREUR FASTLANE ===" > crash_report.txt
+          echo "=== RAPPORT D'ERREUR BRUT ===" > crash_report.txt
           echo "Date: $(date)" >> crash_report.txt
-          echo "---------------------------------" >> crash_report.txt
+          echo "-----------------------------" >> crash_report.txt
           
-          echo ">>> ERREURS CRITIQUES RELEVÉES :" >> crash_report.txt
-          # On cherche les lignes contenant 'error' et on affiche un peu de contexte
-          grep -iC 3 "error" ios/fastlane_build.log >> crash_report.txt || echo "Pas d'erreur explicite trouvée." >> crash_report.txt
+          echo ">>> 50 DERNIÈRES LIGNES (AVEC ERREURS) :" >> crash_report.txt
+          tail -n 100 ios/raw_build.log >> crash_report.txt
           
           echo "" >> crash_report.txt
-          echo ">>> LES 50 DERNIÈRES LIGNES DU LOG :" >> crash_report.txt
-          tail -n 50 ios/fastlane_build.log >> crash_report.txt
+          echo ">>> RECHERCHE DU MOT 'error' :" >> crash_report.txt
+          grep -iC 5 "error" ios/raw_build.log >> crash_report.txt || echo "Pas trouvé." >> crash_report.txt
 
       - name: 📤 Upload Crash Report (Si échec)
         if: failure()
@@ -107,5 +108,3 @@ jobs:
         with:
           name: ERROR-REPORT
           path: crash_report.txt
-
-
