@@ -1,4 +1,4 @@
-name: Build iOS IPA (V17 - Fix CLI)
+name: Build iOS IPA (V18 - Full Dependencies)
 
 on:
   workflow_dispatch:
@@ -17,25 +17,34 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: 🚑 Create Babel Config
+      - name: 🚑 Create Config Files
         run: |
+          # Création de babel.config.js
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
+          # Création de metro.config.js (souvent requis aussi)
+          echo "const { getDefaultConfig } = require('expo/metro-config'); const config = getDefaultConfig(__dirname); module.exports = config;" > metro.config.js
 
-      - name: 📦 Install Dependencies & Fix CLI
+      - name: 📦 Install ALL Dependencies
         run: |
           npm install
-          # ON AJOUTE L'OUTIL MANQUANT ICI :
-          npm install --save-dev @react-native-community/cli @react-native-community/cli-platform-ios
+          # Installation explicite de TOUS les outils de build manquants
+          npm install --save-dev \
+            @react-native-community/cli \
+            @react-native-community/cli-platform-ios \
+            @react-native/metro-config \
+            @expo/metro-config \
+            metro-config \
+            babel-preset-expo \
+            react-native-reanimated
+          
           npm install -g expo-cli
 
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios
 
-      - name: 📦 Manual Bundle (Correction appliquée)
+      - name: 📦 Manual Bundle (The Test)
         run: |
-          # Création du dossier assets s'il n'existe pas
           mkdir -p ios/assets
-          # Lancement du bundle avec le CLI maintenant installé
           npx react-native bundle \
             --entry-file index.js \
             --platform ios \
@@ -67,7 +76,6 @@ jobs:
         id: build_step
         run: |
           cd ios
-          # On dit à Xcode de ne pas refaire le bundle puisqu'on l'a fait manuellement
           export SKIP_BUNDLING=1
           set -o pipefail
           xcodebuild \
@@ -107,7 +115,7 @@ jobs:
       - name: 🔍 Error Report
         if: failure()
         run: |
-          echo "=== RAPPORT V17 ===" > crash_report.txt
+          echo "=== RAPPORT V18 ===" > crash_report.txt
           tail -n 50 ios/raw_build.log >> crash_report.txt || echo "Pas de log build" >> crash_report.txt
 
       - name: 📤 Upload Crash Report
