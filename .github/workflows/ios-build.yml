@@ -1,4 +1,4 @@
-name: Build iOS IPA (V18 - Full Dependencies)
+name: Build iOS IPA (V20 - Armageddon Edition)
 
 on:
   workflow_dispatch:
@@ -11,38 +11,96 @@ jobs:
       - name: 🏗 Setup Repo
         uses: actions/checkout@v3
 
-      - name: 🏗 Setup Node
+      - name: 🏗 Setup Node 20
         uses: actions/setup-node@v3
         with:
           node-version: 20
           cache: 'npm'
 
-      - name: 🚑 Create Config Files
+      # --- BLINDAGE DES FICHIERS CONFIG ---
+      - name: 🛡 Sanitize & Force Configs
         run: |
-          # Création de babel.config.js
+          # 1. On force un babel.config.js valide
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
-          # Création de metro.config.js (souvent requis aussi)
-          echo "const { getDefaultConfig } = require('expo/metro-config'); const config = getDefaultConfig(__dirname); module.exports = config;" > metro.config.js
+          
+          # 2. On nettoie les dossiers poubelles
+          rm -rf node_modules ios android .expo
+          
+          # 3. On force le bundleIdentifier dans app.json pour éviter les conflits
+          sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.hack"/' app.json || echo "app.json missing"
 
-      - name: 📦 Install ALL Dependencies
+      # --- INSTALLATION MASSIVE ---
+      - name: 📦 Install Dependencies (Legacy Peer Deps)
         run: |
-          npm install
-          # Installation explicite de TOUS les outils de build manquants
-          npm install --save-dev \
+          npm install -g expo-cli
+          npm install --legacy-peer-deps
+          # On installe manuellement tout ce qui pourrait manquer au bundler
+          npm install --save-dev --legacy-peer-deps \
             @react-native-community/cli \
             @react-native-community/cli-platform-ios \
-            @react-native/metro-config \
-            @expo/metro-config \
             metro-config \
-            babel-preset-expo \
+            @react-native/metro-config \
+            babel-plugin-module-resolver \
             react-native-reanimated
-          
-          npm install -g expo-cli
 
+      # --- GÉNÉRATION NATIVE ---
       - name: 🚀 Prebuild
-        run: npx expo prebuild --platform ios
+        run: npx expo prebuild --platform ios --clean
 
-      - name: 📦 Manual Bundle (The Test)
+      # --- CRÉATION DE FAUX CERTIFICAT (L'ARME SECRÈTE) ---
+      - name: 🔐 Create Self-Signed Certificate
+        run: |
+          # On crée un certificat temporaire pour calmer Xcode
+          sudo security create-keychain -p "temporary" build.keychain
+          sudo security list-keychains -s build.keychain
+          sudo security default-keychain -s build.keychain
+          sudo security unlock-keychain -p "temporary" build.keychain
+          
+          # Génération d'un certificat auto-signé
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout selfsigned.key -out selfsigned.crt -subj "/CN=iPhone Developer: Fake User"
+          openssl pkcs12 -export -out selfsigned.p12 -inkey selfsigned.key -in selfsigned.crt -passout pass:password -name "Fake Cert"
+          
+          # Importation dans le trousseau
+          sudo security import selfsigned.p12 -k build.keychain -P password -T /usr/bin/codesign
+          sudo security set-key-partition-list -S apple-tool:,apple: -s -k "temporary" build.keychain
+
+      # --- MODIFICATION CHIRURGICALE DU PROJET ---
+      - name: 💉 Deep Project Surgery
+        run: |
+          cd ios
+          # On utilise Ruby pour modifier le Podfile proprement (pas de doublons)
+          ruby -e "
+            content = File.read('Podfile')
+            unless content.include?('CODE_SIGNING_ALLOWED')
+              fix = \"
+                post_install do |installer|
+                  installer.pods_project.targets.each do |target|
+                    target.build_configurations.each do |config|
+                      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+                      config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+                      config.build_settings['CODE_SIGNING_IDENTITY'] = ''
+                      config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''
+                    end
+                  end
+                end
+              \"
+              # On insère avant la fin du fichier si pas de hook, sinon on remplace (trop risqué), ici on append juste en espérant que cocoapods gère le merge ou on le met en haut
+              File.open('Podfile', 'a') { |f| f.write(fix) }
+            end
+          "
+          
+          # On désactive la signature sur le projet principal via sed (plus fiable ici)
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/DevelopmentTeam = .*/DevelopmentTeam = "";/g'
+
+      - name: 🥥 Install Pods
+        run: |
+          cd ios
+          pod install --repo-update
+
+      # --- LE MANUAL BUNDLE (LE TEST DE VÉRITÉ) ---
+      - name: 📦 Manual Bundle JS
         run: |
           mkdir -p ios/assets
           npx react-native bundle \
@@ -53,31 +111,14 @@ jobs:
             --assets-dest ios \
             --reset-cache
 
-      - name: 💉 Force Disable Signing in Pods
-        run: |
-          cd ios
-          sed -i '' '/post_install do |installer|/a\
-            installer.pods_project.targets.each do |target|\
-              target.build_configurations.each do |config|\
-                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"\
-                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"\
-                config.build_settings["CODE_SIGNING_IDENTITY"] = ""\
-                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""\
-              end\
-            end\
-          ' Podfile
-
-      - name: 🥥 Install Pods
-        run: |
-          cd ios
-          pod install --repo-update
-
-      - name: 🔨 Build App (Skip Bundling)
+      # --- LE BUILD FINAL ---
+      - name: 🔨 Build Native App (Raw Mode)
         id: build_step
         run: |
           cd ios
           export SKIP_BUNDLING=1
           set -o pipefail
+          # On lance le build. Notez CODE_SIGN_IDENTITY="-" pour utiliser le certificat ad-hoc généré plus haut si besoin
           xcodebuild \
             -workspace FlowOS.xcworkspace \
             -scheme FlowOS \
@@ -86,25 +127,29 @@ jobs:
             -derivedDataPath build \
             -destination 'generic/platform=iOS' \
             clean build \
-            CODE_SIGN_ENTITLEMENTS="" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
             2>&1 | tee raw_build.log
 
+      # --- L'EMBALLAGE ---
       - name: 📦 Package IPA
         if: success()
         run: |
           cd ios
           mkdir Payload
-          APP_SOURCE=$(find build/Build/Products/Release-iphoneos -name "FlowOS.app" | head -n 1)
-          if [ -z "$APP_SOURCE" ]; then
-            echo "ERREUR: FlowOS.app introuvable."
+          # On cherche le .app avec find pour être sûr
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "CRITICAL FAILURE: .app not found."
             exit 1
           fi
-          cp -R "$APP_SOURCE" Payload/
+          echo "Packaging $APP_PATH..."
+          cp -R "$APP_PATH" Payload/
           zip -r FlowOS.ipa Payload
 
+      # --- UPLOAD ARTIFACTS ---
       - name: 📤 Upload IPA
         if: success()
         uses: actions/upload-artifact@v4
@@ -112,13 +157,17 @@ jobs:
           name: flowos-ipa
           path: ios/FlowOS.ipa
 
-      - name: 🔍 Error Report
+      - name: 🔍 Debug Report (Si échec)
         if: failure()
         run: |
-          echo "=== RAPPORT V18 ===" > crash_report.txt
-          tail -n 50 ios/raw_build.log >> crash_report.txt || echo "Pas de log build" >> crash_report.txt
+          echo "=== RAPPORT ARMAGEDDON ===" > crash_report.txt
+          echo ">>> BUNDLE STATUS:" >> crash_report.txt
+          ls -lh ios/main.jsbundle >> crash_report.txt || echo "Bundle JS manquant" >> crash_report.txt
+          echo "" >> crash_report.txt
+          echo ">>> BUILD LOG TAIL:" >> crash_report.txt
+          tail -n 200 ios/raw_build.log >> crash_report.txt
 
-      - name: 📤 Upload Crash Report
+      - name: 📤 Upload Report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
