@@ -1,4 +1,4 @@
-name: Build iOS IPA (V21 - Permission Fix)
+name: Build iOS IPA (V22 - Dependency Sniper)
 
 on:
   workflow_dispatch:
@@ -17,48 +17,49 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      # --- BLINDAGE DES FICHIERS CONFIG ---
       - name: 🛡 Sanitize & Force Configs
         run: |
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
           rm -rf node_modules ios android .expo
           sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.hack"/' app.json || echo "app.json missing"
 
-      # --- INSTALLATION MASSIVE ---
-      - name: 📦 Install Dependencies
+      - name: 📦 Install Dependencies (Fix Reanimated)
         run: |
           npm install -g expo-cli
           npm install --legacy-peer-deps
+          
+          # Installation forcée des dépendances manquantes pour Reanimated
+          npm install --save --legacy-peer-deps \
+            react-native-reanimated \
+            react-native-worklets-core \
+            react-native-gesture-handler \
+            expo-status-bar \
+            expo-linear-gradient \
+            @react-native-async-storage/async-storage
+
+          # Outils de build
           npm install --save-dev --legacy-peer-deps \
             @react-native-community/cli \
             @react-native-community/cli-platform-ios \
             metro-config \
             @react-native/metro-config \
-            babel-plugin-module-resolver \
-            react-native-reanimated
+            babel-plugin-module-resolver
 
-      # --- GÉNÉRATION NATIVE ---
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios --clean
 
-      # --- CRÉATION DE FAUX CERTIFICAT (SANS SUDO) ---
+      # --- CRÉATION DE FAUX CERTIFICAT ---
       - name: 🔐 Create Self-Signed Certificate
         run: |
-          # Création du trousseau sans sudo (dans l'espace utilisateur)
           security create-keychain -p "temporary" build.keychain
           security list-keychains -s build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "temporary" build.keychain
-          
-          # Génération du certificat
           openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout selfsigned.key -out selfsigned.crt -subj "/CN=iPhone Developer: Fake User"
           openssl pkcs12 -export -out selfsigned.p12 -inkey selfsigned.key -in selfsigned.crt -passout pass:password -name "Fake Cert"
-          
-          # Importation
           security import selfsigned.p12 -k build.keychain -P password -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "temporary" build.keychain
 
-      # --- MODIFICATION CHIRURGICALE DU PROJET ---
       - name: 💉 Deep Project Surgery
         run: |
           cd ios
@@ -92,7 +93,6 @@ jobs:
           cd ios
           pod install --repo-update
 
-      # --- MANUAL BUNDLE ---
       - name: 📦 Manual Bundle JS
         run: |
           mkdir -p ios/assets
@@ -104,7 +104,6 @@ jobs:
             --assets-dest ios \
             --reset-cache
 
-      # --- BUILD FINAL ---
       - name: 🔨 Build Native App
         id: build_step
         run: |
@@ -125,7 +124,6 @@ jobs:
             CODE_SIGN_ENTITLEMENTS="" \
             2>&1 | tee raw_build.log
 
-      # --- PACKAGING ---
       - name: 📦 Package IPA
         if: success()
         run: |
@@ -146,10 +144,10 @@ jobs:
           name: flowos-ipa
           path: ios/FlowOS.ipa
 
-      - name: 🔍 Debug Report (Si échec)
+      - name: 🔍 Debug Report
         if: failure()
         run: |
-          echo "=== RAPPORT V21 ===" > crash_report.txt
+          echo "=== RAPPORT V22 ===" > crash_report.txt
           tail -n 200 ios/raw_build.log >> crash_report.txt || echo "Log non trouvé" >> crash_report.txt
 
       - name: 📤 Upload Report
