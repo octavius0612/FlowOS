@@ -1,4 +1,4 @@
-name: Build iOS IPA (Unsigned - Surgical Fix)
+name: Build iOS IPA (Fastlane + Diagnostics)
 
 on:
   workflow_dispatch:
@@ -25,64 +25,87 @@ jobs:
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios
 
-      - name: 💉 Surgical Injection in Podfile
+      - name: 🛠 Setup Fastlane
         run: |
           cd ios
-          # On utilise sed pour insérer notre code DANS le bloc post_install existant
-          # au lieu d'en créer un nouveau qui causerait un conflit.
-          sed -i '' '/post_install do |installer|/a\
-            installer.pods_project.targets.each do |target|\
-              target.build_configurations.each do |config|\
-                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"\
-                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"\
-                config.build_settings["CODE_SIGNING_IDENTITY"] = ""\
-                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""\
-              end\
-            end\
-          ' Podfile
+          mkdir -p fastlane
+          # Création d'un fichier de config Fastlane qui force le mode non-signé
+          cat <<EOT > fastlane/Fastfile
+          default_platform(:ios)
+          platform :ios do
+            desc "Build iOS App without signing"
+            lane :build_unsigned do
+              gym(
+                scheme: "FlowOS",
+                clean: true,
+                output_directory: "./build",
+                output_name: "FlowOS.ipa",
+                export_method: "ad-hoc",
+                skip_profile_detection: true,
+                include_bitcode: false,
+                include_symbols: false,
+                export_options: {
+                  signingStyle: "manual",
+                  provisioningProfiles: {}
+                },
+                xcargs: "CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' PROVISIONING_PROFILE_SPECIFIER=''"
+              )
+            end
+          end
+          EOT
 
       - name: 🥥 Install Pods
         run: |
           cd ios
           pod install --repo-update
 
-      - name: 🔓 Force Disable Signing on Main Project
+      - name: 🔨 Build with Fastlane & Capture Logs
+        id: build_step
         run: |
           cd ios
-          # Désactivation sur le projet principal
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g'
+          # On lance Fastlane et on enregistre TOUT dans un fichier log
+          set -o pipefail
+          bundle exec fastlane build_unsigned | tee fastlane_build.log
 
-      - name: 🔨 Build App
+      # --- SECTION SUCCÈS ---
+      
+      - name: 📦 Check IPA (Si succès)
+        if: success()
         run: |
-          cd ios
-          xcodebuild -workspace FlowOS.xcworkspace \
-            -scheme FlowOS \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            -destination 'generic/platform=iOS' \
-            clean build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_IDENTITY="" \
-            -quiet
-
-      - name: 📦 Package IPA
-        run: |
-          mkdir Payload
-          # Récupération automatique du fichier .app
-          APP_PATH=$(find ios/build -name "FlowOS.app" | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "Erreur: FlowOS.app non trouvé !"
+          if [ ! -f "ios/build/FlowOS.ipa" ]; then
+            echo "ERREUR: IPA non trouvé malgré le succès de Fastlane !"
             exit 1
           fi
-          cp -R "$APP_PATH" Payload/
-          zip -r FlowOS.ipa Payload
 
-      - name: 📤 Upload Artifact
+      - name: 📤 Upload IPA (Si succès)
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: flowos-ipa
-          path: FlowOS.ipa
+          path: ios/build/FlowOS.ipa
+
+      # --- SECTION DIAGNOSTIC (SI ÉCHEC) ---
+
+      - name: 🔍 Generate Error Report (Si échec)
+        if: failure()
+        run: |
+          echo "=== RAPPORT D'ERREUR FASTLANE ===" > crash_report.txt
+          echo "Date: $(date)" >> crash_report.txt
+          echo "---------------------------------" >> crash_report.txt
+          
+          echo ">>> ERREURS CRITIQUES RELEVÉES :" >> crash_report.txt
+          # On cherche les lignes contenant 'error' et on affiche un peu de contexte
+          grep -iC 3 "error" ios/fastlane_build.log >> crash_report.txt || echo "Pas d'erreur explicite trouvée." >> crash_report.txt
+          
+          echo "" >> crash_report.txt
+          echo ">>> LES 50 DERNIÈRES LIGNES DU LOG :" >> crash_report.txt
+          tail -n 50 ios/fastlane_build.log >> crash_report.txt
+
+      - name: 📤 Upload Crash Report (Si échec)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ERROR-REPORT
+          path: crash_report.txt
+
+
