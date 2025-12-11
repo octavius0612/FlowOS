@@ -1,4 +1,4 @@
-name: Build iOS IPA (V15 - No Entitlements)
+name: Build iOS IPA (V16 - Manual Bundle)
 
 on:
   workflow_dispatch:
@@ -17,6 +17,13 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: 🚑 Force Create Config Files (Safety Net)
+        run: |
+          # On recrée babel.config.js au cas où il manque
+          echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
+          # On s'assure que les dépendances critiques sont là
+          npm install babel-preset-expo @babel/core --save-dev
+
       - name: 📦 Install Dependencies
         run: |
           npm install
@@ -25,10 +32,21 @@ jobs:
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios
 
-      - name: 💉 Force Disable Signing & Entitlements
+      - name: 📦 Manual Bundle (The Debugger)
+        run: |
+          # On essaie de compiler le JS manuellement pour voir si ça plante ici
+          # Cela va générer le main.jsbundle avant que Xcode ne le fasse
+          npx react-native bundle \
+            --entry-file index.js \
+            --platform ios \
+            --dev false \
+            --bundle-output ios/main.jsbundle \
+            --assets-dest ios \
+            --reset-cache
+
+      - name: 💉 Force Disable Signing in Pods
         run: |
           cd ios
-          # Injection dans le Podfile pour désactiver la signature des dépendances
           sed -i '' '/post_install do |installer|/a\
             installer.pods_project.targets.each do |target|\
               target.build_configurations.each do |config|\
@@ -45,11 +63,12 @@ jobs:
           cd ios
           pod install --repo-update
 
-      - name: 🔨 Build App (No Entitlements)
+      - name: 🔨 Build App (Skip Bundling)
         id: build_step
         run: |
           cd ios
-          # L'astuce est ici : on vide CODE_SIGN_ENTITLEMENTS pour empêcher Xcode de vérifier les capacités
+          # SKIP_BUNDLING=1 dit à Xcode : "J'ai déjà fait le travail, ne lance pas ton script qui plante"
+          export SKIP_BUNDLING=1
           set -o pipefail
           xcodebuild \
             -workspace FlowOS.xcworkspace \
@@ -70,15 +89,11 @@ jobs:
         run: |
           cd ios
           mkdir Payload
-          # On cherche l'app compilée
           APP_SOURCE=$(find build/Build/Products/Release-iphoneos -name "FlowOS.app" | head -n 1)
-          
           if [ -z "$APP_SOURCE" ]; then
             echo "ERREUR: FlowOS.app introuvable."
             exit 1
           fi
-          
-          echo "App trouvée : $APP_SOURCE"
           cp -R "$APP_SOURCE" Payload/
           zip -r FlowOS.ipa Payload
 
@@ -89,12 +104,13 @@ jobs:
           name: flowos-ipa
           path: ios/FlowOS.ipa
 
-      - name: 🔍 Error Report (Si échec)
+      - name: 🔍 Error Report
         if: failure()
         run: |
-          echo "=== ERREUR CRITIQUE V15 ===" > crash_report.txt
-          tail -n 100 ios/raw_build.log >> crash_report.txt
-          
+          echo "=== RAPPORT V16 ===" > crash_report.txt
+          echo "Si l'erreur est dans le bundle JS, elle est ci-dessous :" >> crash_report.txt
+          tail -n 20 ios/raw_build.log >> crash_report.txt
+
       - name: 📤 Upload Crash Report
         if: failure()
         uses: actions/upload-artifact@v4
