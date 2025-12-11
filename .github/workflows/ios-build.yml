@@ -1,4 +1,4 @@
-name: Build iOS IPA (V23 - Stable Versions)
+name: Build iOS IPA (V24 - Config Fix)
 
 on:
   workflow_dispatch:
@@ -17,72 +17,48 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: 🛡 Sanitize & Force Configs
+      # --- ÉTAPE CRITIQUE : CRÉATION DES CONFIGS ---
+      - name: 🚑 Generate Missing Configs
         run: |
-          # On crée un babel.config.js propre pour Reanimated 3
+          # 1. On crée babel.config.js
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
           
-          # Nettoyage
-          rm -rf node_modules ios android .expo
+          # 2. On crée metro.config.js (C'est ce qui manquait !)
+          echo "const { getDefaultConfig } = require('expo/metro-config'); const config = getDefaultConfig(__dirname); module.exports = config;" > metro.config.js
           
-          # On assure un ID unique
-          sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.stable"/' app.json || echo "app.json missing"
+          # 3. On assure un ID unique
+          sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.v24"/' app.json || echo "app.json missing"
 
-      - name: 📦 Install Stable Dependencies
+      # --- INSTALLATION ---
+      - name: 📦 Install Dependencies
         run: |
           npm install -g expo-cli
           
-          # Installation standard (sans legacy-peer-deps pour laisser npm gérer l'arbre si possible, sinon on forcera)
+          # Installation standard
           npm install
           
-          # ON FORCE LES VERSIONS STABLES (C'est la clé du correctif)
-          # Reanimated 3.15 est très stable et n'a pas le bug "worklets"
+          # On force les versions STABLES et les outils de CONFIG
           npm install --save \
             react-native-reanimated@3.15.0 \
             react-native-gesture-handler@2.18.1 \
             expo-status-bar \
             expo-linear-gradient \
-            @react-native-async-storage/async-storage \
-            react-native-safe-area-context \
-            react-native-screens
+            @react-native-async-storage/async-storage
 
-          # Outils de build
+          # On installe explicitement les outils Metro pour éviter l'erreur "Cannot resolve"
           npm install --save-dev \
             @react-native-community/cli \
             @react-native-community/cli-platform-ios \
             metro-config \
             @react-native/metro-config \
-            babel-plugin-module-resolver
+            @expo/metro-config \
+            babel-preset-expo
 
+      # --- GÉNÉRATION NATIVE ---
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios --clean
 
-      # --- HACK SIGNATURE ---
-      - name: 💉 Disable Signing in Pods & Project
-        run: |
-          cd ios
-          # Injection dans le Podfile existant
-          sed -i '' '/post_install do |installer|/a\
-            installer.pods_project.targets.each do |target|\
-              target.build_configurations.each do |config|\
-                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"\
-                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"\
-                config.build_settings["CODE_SIGNING_IDENTITY"] = ""\
-                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""\
-              end\
-            end\
-          ' Podfile
-          
-          # Nettoyage du projet principal
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g'
-
-      - name: 🥥 Install Pods
-        run: |
-          cd ios
-          pod install --repo-update
-
+      # --- TEST DU BUNDLE (Si ça passe ici, le JS est bon) ---
       - name: 📦 Manual Bundle JS
         run: |
           mkdir -p ios/assets
@@ -94,6 +70,32 @@ jobs:
             --assets-dest ios \
             --reset-cache
 
+      # --- HACK SIGNATURE (Pour Xcode) ---
+      - name: 💉 Disable Signing
+        run: |
+          cd ios
+          # Injection Podfile
+          sed -i '' '/post_install do |installer|/a\
+            installer.pods_project.targets.each do |target|\
+              target.build_configurations.each do |config|\
+                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"\
+                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"\
+                config.build_settings["CODE_SIGNING_IDENTITY"] = ""\
+                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""\
+              end\
+            end\
+          ' Podfile
+          
+          # Nettoyage Projet
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
+
+      - name: 🥥 Install Pods
+        run: |
+          cd ios
+          pod install --repo-update
+
+      # --- COMPILATION FINALE ---
       - name: 🔨 Build Native App
         id: build_step
         run: |
@@ -137,7 +139,7 @@ jobs:
       - name: 🔍 Debug Report
         if: failure()
         run: |
-          echo "=== RAPPORT V23 (VERSION STABLE) ===" > crash_report.txt
+          echo "=== RAPPORT V24 ===" > crash_report.txt
           tail -n 100 ios/raw_build.log >> crash_report.txt || echo "Pas de log build" >> crash_report.txt
 
       - name: 📤 Upload Report
