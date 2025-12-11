@@ -1,4 +1,4 @@
-name: Build iOS IPA (Manual Raw Build)
+name: Build iOS IPA (V15 - No Entitlements)
 
 on:
   workflow_dispatch:
@@ -25,11 +25,10 @@ jobs:
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios
 
-      - name: 💉 Force Disable Signing in Pods
+      - name: 💉 Force Disable Signing & Entitlements
         run: |
           cd ios
-          # On injecte la désactivation de signature DANS le hook existant du Podfile
-          # C'est la méthode la plus chirurgicale pour éviter les conflits
+          # Injection dans le Podfile pour désactiver la signature des dépendances
           sed -i '' '/post_install do |installer|/a\
             installer.pods_project.targets.each do |target|\
               target.build_configurations.each do |config|\
@@ -46,12 +45,11 @@ jobs:
           cd ios
           pod install --repo-update
 
-      - name: 🔨 Raw Build (No Export) & Capture All Logs
+      - name: 🔨 Build App (No Entitlements)
         id: build_step
         run: |
           cd ios
-          # On utilise 'build' au lieu de 'archive' pour éviter les checks de signature d'export
-          # On capture stderr (2) et stdout (1) pour ne rien rater
+          # L'astuce est ici : on vide CODE_SIGN_ENTITLEMENTS pour empêcher Xcode de vérifier les capacités
           set -o pipefail
           xcodebuild \
             -workspace FlowOS.xcworkspace \
@@ -59,50 +57,45 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            clean build \
+            CODE_SIGN_ENTITLEMENTS="" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_IDENTITY="" \
-            build \
             2>&1 | tee raw_build.log
 
-      - name: 📦 Manually Package IPA
+      - name: 📦 Package IPA
         if: success()
         run: |
           cd ios
           mkdir Payload
-          # On va chercher l'application compilée dans le dossier derivedData
+          # On cherche l'app compilée
           APP_SOURCE=$(find build/Build/Products/Release-iphoneos -name "FlowOS.app" | head -n 1)
           
           if [ -z "$APP_SOURCE" ]; then
-            echo "ERREUR CRITIQUE: Le fichier .app n'a pas été créé malgré le succès apparent."
+            echo "ERREUR: FlowOS.app introuvable."
             exit 1
           fi
           
+          echo "App trouvée : $APP_SOURCE"
           cp -R "$APP_SOURCE" Payload/
           zip -r FlowOS.ipa Payload
 
-      - name: 📤 Upload IPA (Si succès)
+      - name: 📤 Upload IPA
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: flowos-ipa
           path: ios/FlowOS.ipa
 
-      - name: 🔍 Generate Full Error Report (Si échec)
+      - name: 🔍 Error Report (Si échec)
         if: failure()
         run: |
-          echo "=== RAPPORT D'ERREUR BRUT ===" > crash_report.txt
-          echo "Date: $(date)" >> crash_report.txt
-          echo "-----------------------------" >> crash_report.txt
-          
-          echo ">>> 50 DERNIÈRES LIGNES (AVEC ERREURS) :" >> crash_report.txt
+          echo "=== ERREUR CRITIQUE V15 ===" > crash_report.txt
           tail -n 100 ios/raw_build.log >> crash_report.txt
           
-          echo "" >> crash_report.txt
-          echo ">>> RECHERCHE DU MOT 'error' :" >> crash_report.txt
-          grep -iC 5 "error" ios/raw_build.log >> crash_report.txt || echo "Pas trouvé." >> crash_report.txt
-
-      - name: 📤 Upload Crash Report (Si échec)
+      - name: 📤 Upload Crash Report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
