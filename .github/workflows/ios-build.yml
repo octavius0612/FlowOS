@@ -1,4 +1,4 @@
-name: Build iOS IPA (V16 - Manual Bundle)
+name: Build iOS IPA (V17 - Fix CLI)
 
 on:
   workflow_dispatch:
@@ -17,25 +17,25 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: 🚑 Force Create Config Files (Safety Net)
+      - name: 🚑 Create Babel Config
         run: |
-          # On recrée babel.config.js au cas où il manque
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
-          # On s'assure que les dépendances critiques sont là
-          npm install babel-preset-expo @babel/core --save-dev
 
-      - name: 📦 Install Dependencies
+      - name: 📦 Install Dependencies & Fix CLI
         run: |
           npm install
+          # ON AJOUTE L'OUTIL MANQUANT ICI :
+          npm install --save-dev @react-native-community/cli @react-native-community/cli-platform-ios
           npm install -g expo-cli
 
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios
 
-      - name: 📦 Manual Bundle (The Debugger)
+      - name: 📦 Manual Bundle (Correction appliquée)
         run: |
-          # On essaie de compiler le JS manuellement pour voir si ça plante ici
-          # Cela va générer le main.jsbundle avant que Xcode ne le fasse
+          # Création du dossier assets s'il n'existe pas
+          mkdir -p ios/assets
+          # Lancement du bundle avec le CLI maintenant installé
           npx react-native bundle \
             --entry-file index.js \
             --platform ios \
@@ -67,7 +67,7 @@ jobs:
         id: build_step
         run: |
           cd ios
-          # SKIP_BUNDLING=1 dit à Xcode : "J'ai déjà fait le travail, ne lance pas ton script qui plante"
+          # On dit à Xcode de ne pas refaire le bundle puisqu'on l'a fait manuellement
           export SKIP_BUNDLING=1
           set -o pipefail
           xcodebuild \
@@ -107,9 +107,8 @@ jobs:
       - name: 🔍 Error Report
         if: failure()
         run: |
-          echo "=== RAPPORT V16 ===" > crash_report.txt
-          echo "Si l'erreur est dans le bundle JS, elle est ci-dessous :" >> crash_report.txt
-          tail -n 20 ios/raw_build.log >> crash_report.txt
+          echo "=== RAPPORT V17 ===" > crash_report.txt
+          tail -n 50 ios/raw_build.log >> crash_report.txt || echo "Pas de log build" >> crash_report.txt
 
       - name: 📤 Upload Crash Report
         if: failure()
