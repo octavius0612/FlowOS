@@ -1,7 +1,12 @@
-name: Build iOS IPA (V26 - Missing Assets Fix)
+name: Build iOS IPA (V27 - Stable Architecture)
 
 on:
   workflow_dispatch:
+
+env:
+  # On désactive la nouvelle architecture instable
+  RCT_NEW_ARCH_ENABLED: 0
+  NO_FLIPPER: 1
 
 jobs:
   build:
@@ -17,35 +22,37 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: 🛡 Sanitize & Force Configs
+      - name: 🛡 Force Configs
         run: |
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
           echo "const { getDefaultConfig } = require('expo/metro-config'); const config = getDefaultConfig(__dirname); module.exports = config;" > metro.config.js
           rm -rf node_modules ios android .expo
-          sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.v26"/' app.json || echo "app.json missing"
+          # On change l'ID pour éviter les conflits de cache
+          sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.stable.v27"/' app.json || echo "app.json missing"
 
-      - name: 📦 Install ALL Dependencies
+      - name: 📦 Install STABLE Dependencies (Expo 51)
         run: |
           npm install -g expo-cli
-          npm install
           
-          # ON AJOUTE LES DÉPENDANCES MANQUANTES (expo-asset, expo-font, etc.)
-          npm install --save \
-            expo-asset \
-            expo-font \
-            expo-constants \
-            expo-file-system \
-            react-native-reanimated@3.15.0 \
-            react-native-gesture-handler@2.18.1 \
-            react-native-safe-area-context \
-            react-native-screens \
-            expo-status-bar \
-            expo-linear-gradient \
-            @expo/vector-icons \
+          # On force le couple Expo 51 / RN 0.74 qui est ultra stable
+          npm install \
+            expo@^51.0.0 \
+            react-native@0.74.5 \
+            react-native-reanimated@3.10.1 \
+            react-native-gesture-handler@2.16.1 \
+            react-native-safe-area-context@4.10.5 \
+            react-native-screens@3.31.1 \
+            expo-status-bar@~1.12.1 \
+            expo-linear-gradient@~13.0.2 \
+            expo-asset@~10.0.10 \
+            expo-font@~12.0.9 \
+            expo-constants@~16.0.2 \
+            expo-file-system@~17.0.1 \
+            @expo/vector-icons@^14.0.0 \
             @google/generative-ai \
             @react-native-async-storage/async-storage
 
-          # Outils de build
+          # Outils de build compatibles
           npm install --save-dev \
             @react-native-community/cli \
             @react-native-community/cli-platform-ios \
@@ -81,7 +88,8 @@ jobs:
       - name: 🥥 Install Pods
         run: |
           cd ios
-          pod install --repo-update
+          # On s'assure que la New Arch est bien désactivée
+          RCT_NEW_ARCH_ENABLED=0 pod install --repo-update
 
       - name: 📦 Manual Bundle JS
         run: |
@@ -112,6 +120,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_IDENTITY="" \
+            RCT_NEW_ARCH_ENABLED=0 \
             2>&1 | tee raw_build.log
 
       - name: 📦 Package IPA
@@ -137,7 +146,7 @@ jobs:
       - name: 🔍 Debug Report
         if: failure()
         run: |
-          echo "=== RAPPORT V26 ===" > crash_report.txt
+          echo "=== RAPPORT V27 ===" > crash_report.txt
           tail -n 100 ios/raw_build.log >> crash_report.txt || echo "Pas de log" >> crash_report.txt
 
       - name: 📤 Upload Report
