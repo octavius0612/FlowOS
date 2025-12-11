@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    # On utilise macOS 15 (Sequoia) pour avoir Xcode 16.1+ requis par React Native
+    # On utilise macOS 15 pour avoir Xcode 16 (requis par le nouveau React Native)
     runs-on: macos-15
 
     steps:
@@ -19,13 +19,20 @@ jobs:
           cache: 'npm'
 
       - name: 📦 Install Dependencies
-        run: npm install
-
-      - name: ⚙️ Setup Expo
-        run: npm install -g expo-cli
+        run: |
+          npm install
+          npm install -g expo-cli
 
       - name: 🚀 Prebuild (Generate Native iOS Code)
         run: npx expo prebuild --platform ios
+
+      - name: 🔓 Disable Signing Manually (The Magic Fix)
+        run: |
+          cd ios
+          # On force la désactivation de la signature directement dans le fichier projet
+          sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' FlowOS.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' FlowOS.xcodeproj/project.pbxproj
+          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g' FlowOS.xcodeproj/project.pbxproj
 
       - name: 🥥 Install Pods
         run: |
@@ -41,20 +48,17 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build \
             -destination 'generic/platform=iOS' \
-            clean build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            ONLY_ACTIVE_ARCH=NO \
-            -allowProvisioningUpdates
+            PROVISIONING_PROFILE_SPECIFIER=""
 
       - name: 📦 Package IPA
         run: |
           mkdir Payload
-          # On déplace le fichier .app vers le dossier Payload
+          # On récupère le .app généré
           mv ios/build/Build/Products/Release-iphoneos/FlowOS.app Payload/
-          # On compresse
+          # On compresse en .ipa
           zip -r FlowOS.ipa Payload
 
       - name: 📤 Upload Artifact
