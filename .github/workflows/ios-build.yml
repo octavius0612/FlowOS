@@ -1,11 +1,10 @@
-name: Build iOS IPA (Unsigned)
+name: Build iOS IPA (Ad-Hoc)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    # On utilise macOS 15 pour avoir Xcode 16 (requis par le nouveau React Native)
     runs-on: macos-15
 
     steps:
@@ -26,13 +25,14 @@ jobs:
       - name: 🚀 Prebuild (Generate Native iOS Code)
         run: npx expo prebuild --platform ios
 
-      - name: 🔓 Disable Signing Manually (The Magic Fix)
+      - name: 🔓 Configure Ad-Hoc Signing (The Fix)
         run: |
           cd ios
-          # On force la désactivation de la signature directement dans le fichier projet
-          sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' FlowOS.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' FlowOS.xcodeproj/project.pbxproj
-          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g' FlowOS.xcodeproj/project.pbxproj
+          # On modifie le projet pour accepter la signature Ad-Hoc
+          sed -i '' 's/CODE_SIGNING_ALLOWED = NO/CODE_SIGNING_ALLOWED = YES/g' FlowOS.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGNING_REQUIRED = NO/CODE_SIGNING_REQUIRED = YES/g' FlowOS.xcodeproj/project.pbxproj
+          # Le tiret "-" signifie signature ad-hoc (locale)
+          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "-";/g' FlowOS.xcodeproj/project.pbxproj
 
       - name: 🥥 Install Pods
         run: |
@@ -42,23 +42,25 @@ jobs:
       - name: 🔨 Build App (xcodebuild)
         run: |
           cd ios
+          # On utilise -allowProvisioningUpdates même sans compte pour forcer Xcode à utiliser des profils locaux
           xcodebuild -workspace FlowOS.xcworkspace \
             -scheme FlowOS \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
             -destination 'generic/platform=iOS' \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
+            clean build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED="NO" \
+            CODE_SIGNING_ALLOWED="YES" \
+            -quiet
 
       - name: 📦 Package IPA
         run: |
           mkdir Payload
-          # On récupère le .app généré
+          # On déplace le fichier .app vers le dossier Payload
           mv ios/build/Build/Products/Release-iphoneos/FlowOS.app Payload/
-          # On compresse en .ipa
+          # On compresse
           zip -r FlowOS.ipa Payload
 
       - name: 📤 Upload Artifact
