@@ -1,4 +1,4 @@
-name: Build iOS IPA (V22 - Dependency Sniper)
+name: Build iOS IPA (V23 - Stable Versions)
 
 on:
   workflow_dispatch:
@@ -19,26 +19,35 @@ jobs:
 
       - name: 🛡 Sanitize & Force Configs
         run: |
+          # On crée un babel.config.js propre pour Reanimated 3
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
+          
+          # Nettoyage
           rm -rf node_modules ios android .expo
-          sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.hack"/' app.json || echo "app.json missing"
+          
+          # On assure un ID unique
+          sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.stable"/' app.json || echo "app.json missing"
 
-      - name: 📦 Install Dependencies (Fix Reanimated)
+      - name: 📦 Install Stable Dependencies
         run: |
           npm install -g expo-cli
-          npm install --legacy-peer-deps
           
-          # Installation forcée des dépendances manquantes pour Reanimated
-          npm install --save --legacy-peer-deps \
-            react-native-reanimated \
-            react-native-worklets-core \
-            react-native-gesture-handler \
+          # Installation standard (sans legacy-peer-deps pour laisser npm gérer l'arbre si possible, sinon on forcera)
+          npm install
+          
+          # ON FORCE LES VERSIONS STABLES (C'est la clé du correctif)
+          # Reanimated 3.15 est très stable et n'a pas le bug "worklets"
+          npm install --save \
+            react-native-reanimated@3.15.0 \
+            react-native-gesture-handler@2.18.1 \
             expo-status-bar \
             expo-linear-gradient \
-            @react-native-async-storage/async-storage
+            @react-native-async-storage/async-storage \
+            react-native-safe-area-context \
+            react-native-screens
 
           # Outils de build
-          npm install --save-dev --legacy-peer-deps \
+          npm install --save-dev \
             @react-native-community/cli \
             @react-native-community/cli-platform-ios \
             metro-config \
@@ -48,45 +57,26 @@ jobs:
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios --clean
 
-      # --- CRÉATION DE FAUX CERTIFICAT ---
-      - name: 🔐 Create Self-Signed Certificate
-        run: |
-          security create-keychain -p "temporary" build.keychain
-          security list-keychains -s build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "temporary" build.keychain
-          openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout selfsigned.key -out selfsigned.crt -subj "/CN=iPhone Developer: Fake User"
-          openssl pkcs12 -export -out selfsigned.p12 -inkey selfsigned.key -in selfsigned.crt -passout pass:password -name "Fake Cert"
-          security import selfsigned.p12 -k build.keychain -P password -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "temporary" build.keychain
-
-      - name: 💉 Deep Project Surgery
+      # --- HACK SIGNATURE ---
+      - name: 💉 Disable Signing in Pods & Project
         run: |
           cd ios
-          # Injection Podfile
-          ruby -e "
-            content = File.read('Podfile')
-            unless content.include?('CODE_SIGNING_ALLOWED')
-              fix = \"
-                post_install do |installer|
-                  installer.pods_project.targets.each do |target|
-                    target.build_configurations.each do |config|
-                      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-                      config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
-                      config.build_settings['CODE_SIGNING_IDENTITY'] = ''
-                      config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''
-                    end
-                  end
-                end
-              \"
-              File.open('Podfile', 'a') { |f| f.write(fix) }
-            end
-          "
+          # Injection dans le Podfile existant
+          sed -i '' '/post_install do |installer|/a\
+            installer.pods_project.targets.each do |target|\
+              target.build_configurations.each do |config|\
+                config.build_settings["CODE_SIGNING_ALLOWED"] = "NO"\
+                config.build_settings["CODE_SIGNING_REQUIRED"] = "NO"\
+                config.build_settings["CODE_SIGNING_IDENTITY"] = ""\
+                config.build_settings["EXPANDED_CODE_SIGN_IDENTITY"] = ""\
+              end\
+            end\
+          ' Podfile
           
-          # Nettoyage pbxproj
+          # Nettoyage du projet principal
           find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
           find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
-          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/DevelopmentTeam = .*/DevelopmentTeam = "";/g'
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g'
 
       - name: 🥥 Install Pods
         run: |
@@ -118,10 +108,10 @@ jobs:
             -derivedDataPath build \
             -destination 'generic/platform=iOS' \
             clean build \
+            CODE_SIGN_ENTITLEMENTS="" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_IDENTITY="" \
-            CODE_SIGN_ENTITLEMENTS="" \
             2>&1 | tee raw_build.log
 
       - name: 📦 Package IPA
@@ -147,8 +137,8 @@ jobs:
       - name: 🔍 Debug Report
         if: failure()
         run: |
-          echo "=== RAPPORT V22 ===" > crash_report.txt
-          tail -n 200 ios/raw_build.log >> crash_report.txt || echo "Log non trouvé" >> crash_report.txt
+          echo "=== RAPPORT V23 (VERSION STABLE) ===" > crash_report.txt
+          tail -n 100 ios/raw_build.log >> crash_report.txt || echo "Pas de log build" >> crash_report.txt
 
       - name: 📤 Upload Report
         if: failure()
