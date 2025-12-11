@@ -1,4 +1,4 @@
-name: Build iOS IPA (V20 - Armageddon Edition)
+name: Build iOS IPA (V21 - Permission Fix)
 
 on:
   workflow_dispatch:
@@ -20,21 +20,15 @@ jobs:
       # --- BLINDAGE DES FICHIERS CONFIG ---
       - name: 🛡 Sanitize & Force Configs
         run: |
-          # 1. On force un babel.config.js valide
           echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
-          
-          # 2. On nettoie les dossiers poubelles
           rm -rf node_modules ios android .expo
-          
-          # 3. On force le bundleIdentifier dans app.json pour éviter les conflits
           sed -i '' 's/"bundleIdentifier": ".*"/"bundleIdentifier": "com.flowos.hack"/' app.json || echo "app.json missing"
 
       # --- INSTALLATION MASSIVE ---
-      - name: 📦 Install Dependencies (Legacy Peer Deps)
+      - name: 📦 Install Dependencies
         run: |
           npm install -g expo-cli
           npm install --legacy-peer-deps
-          # On installe manuellement tout ce qui pourrait manquer au bundler
           npm install --save-dev --legacy-peer-deps \
             @react-native-community/cli \
             @react-native-community/cli-platform-ios \
@@ -47,28 +41,28 @@ jobs:
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios --clean
 
-      # --- CRÉATION DE FAUX CERTIFICAT (L'ARME SECRÈTE) ---
+      # --- CRÉATION DE FAUX CERTIFICAT (SANS SUDO) ---
       - name: 🔐 Create Self-Signed Certificate
         run: |
-          # On crée un certificat temporaire pour calmer Xcode
-          sudo security create-keychain -p "temporary" build.keychain
-          sudo security list-keychains -s build.keychain
-          sudo security default-keychain -s build.keychain
-          sudo security unlock-keychain -p "temporary" build.keychain
+          # Création du trousseau sans sudo (dans l'espace utilisateur)
+          security create-keychain -p "temporary" build.keychain
+          security list-keychains -s build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "temporary" build.keychain
           
-          # Génération d'un certificat auto-signé
+          # Génération du certificat
           openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout selfsigned.key -out selfsigned.crt -subj "/CN=iPhone Developer: Fake User"
           openssl pkcs12 -export -out selfsigned.p12 -inkey selfsigned.key -in selfsigned.crt -passout pass:password -name "Fake Cert"
           
-          # Importation dans le trousseau
-          sudo security import selfsigned.p12 -k build.keychain -P password -T /usr/bin/codesign
-          sudo security set-key-partition-list -S apple-tool:,apple: -s -k "temporary" build.keychain
+          # Importation
+          security import selfsigned.p12 -k build.keychain -P password -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "temporary" build.keychain
 
       # --- MODIFICATION CHIRURGICALE DU PROJET ---
       - name: 💉 Deep Project Surgery
         run: |
           cd ios
-          # On utilise Ruby pour modifier le Podfile proprement (pas de doublons)
+          # Injection Podfile
           ruby -e "
             content = File.read('Podfile')
             unless content.include?('CODE_SIGNING_ALLOWED')
@@ -84,12 +78,11 @@ jobs:
                   end
                 end
               \"
-              # On insère avant la fin du fichier si pas de hook, sinon on remplace (trop risqué), ici on append juste en espérant que cocoapods gère le merge ou on le met en haut
               File.open('Podfile', 'a') { |f| f.write(fix) }
             end
           "
           
-          # On désactive la signature sur le projet principal via sed (plus fiable ici)
+          # Nettoyage pbxproj
           find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
           find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
           find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/DevelopmentTeam = .*/DevelopmentTeam = "";/g'
@@ -99,7 +92,7 @@ jobs:
           cd ios
           pod install --repo-update
 
-      # --- LE MANUAL BUNDLE (LE TEST DE VÉRITÉ) ---
+      # --- MANUAL BUNDLE ---
       - name: 📦 Manual Bundle JS
         run: |
           mkdir -p ios/assets
@@ -111,14 +104,13 @@ jobs:
             --assets-dest ios \
             --reset-cache
 
-      # --- LE BUILD FINAL ---
-      - name: 🔨 Build Native App (Raw Mode)
+      # --- BUILD FINAL ---
+      - name: 🔨 Build Native App
         id: build_step
         run: |
           cd ios
           export SKIP_BUNDLING=1
           set -o pipefail
-          # On lance le build. Notez CODE_SIGN_IDENTITY="-" pour utiliser le certificat ad-hoc généré plus haut si besoin
           xcodebuild \
             -workspace FlowOS.xcworkspace \
             -scheme FlowOS \
@@ -133,23 +125,20 @@ jobs:
             CODE_SIGN_ENTITLEMENTS="" \
             2>&1 | tee raw_build.log
 
-      # --- L'EMBALLAGE ---
+      # --- PACKAGING ---
       - name: 📦 Package IPA
         if: success()
         run: |
           cd ios
           mkdir Payload
-          # On cherche le .app avec find pour être sûr
           APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" | head -n 1)
           if [ -z "$APP_PATH" ]; then
             echo "CRITICAL FAILURE: .app not found."
             exit 1
           fi
-          echo "Packaging $APP_PATH..."
           cp -R "$APP_PATH" Payload/
           zip -r FlowOS.ipa Payload
 
-      # --- UPLOAD ARTIFACTS ---
       - name: 📤 Upload IPA
         if: success()
         uses: actions/upload-artifact@v4
@@ -160,12 +149,8 @@ jobs:
       - name: 🔍 Debug Report (Si échec)
         if: failure()
         run: |
-          echo "=== RAPPORT ARMAGEDDON ===" > crash_report.txt
-          echo ">>> BUNDLE STATUS:" >> crash_report.txt
-          ls -lh ios/main.jsbundle >> crash_report.txt || echo "Bundle JS manquant" >> crash_report.txt
-          echo "" >> crash_report.txt
-          echo ">>> BUILD LOG TAIL:" >> crash_report.txt
-          tail -n 200 ios/raw_build.log >> crash_report.txt
+          echo "=== RAPPORT V21 ===" > crash_report.txt
+          tail -n 200 ios/raw_build.log >> crash_report.txt || echo "Log non trouvé" >> crash_report.txt
 
       - name: 📤 Upload Report
         if: failure()
