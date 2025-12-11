@@ -1,4 +1,4 @@
-name: Build iOS IPA (Diagnostic Mode)
+name: Build iOS IPA (No Sign - Nuclear)
 
 on:
   workflow_dispatch:
@@ -25,24 +25,23 @@ jobs:
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios
 
-      - name: 🔓 Configure Ad-Hoc Signing
-        run: |
-          cd ios
-          sed -i '' 's/CODE_SIGNING_ALLOWED = NO/CODE_SIGNING_ALLOWED = YES/g' FlowOS.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGNING_REQUIRED = NO/CODE_SIGNING_REQUIRED = YES/g' FlowOS.xcodeproj/project.pbxproj
-          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "-";/g' FlowOS.xcodeproj/project.pbxproj
-
       - name: 🥥 Install Pods
         run: |
           cd ios
           pod install --repo-update
 
-      - name: 🔨 Build App & Capture Logs
-        id: build_step
+      - name: 🔓 Nuclear Signing Removal
         run: |
           cd ios
-          # On lance le build et on redirige la sortie vers un fichier log complet
-          set -o pipefail
+          # Cette commande magique trouve TOUS les fichiers de configuration (App + Pods) 
+          # et force la désactivation de la signature partout.
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
+          find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g'
+
+      - name: 🔨 Build App
+        run: |
+          cd ios
           xcodebuild -workspace FlowOS.xcworkspace \
             -scheme FlowOS \
             -configuration Release \
@@ -50,49 +49,19 @@ jobs:
             -derivedDataPath build \
             -destination 'generic/platform=iOS' \
             clean build \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED="NO" \
-            CODE_SIGNING_ALLOWED="YES" \
-            -allowProvisioningUpdates \
-            | tee full_build.log
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY="" \
+            -quiet
 
-      - name: 📦 Package IPA (Si succès)
-        if: success()
+      - name: 📦 Package IPA
         run: |
           mkdir Payload
           mv ios/build/Build/Products/Release-iphoneos/FlowOS.app Payload/
           zip -r FlowOS.ipa Payload
 
-      - name: 🔍 Generate Error Report (Si échec)
-        if: failure()
-        run: |
-          echo "=== RAPPORT D'ERREUR FLOW OS ===" > crash_report.txt
-          echo "Date: $(date)" >> crash_report.txt
-          echo "--------------------------------" >> crash_report.txt
-          echo "" >> crash_report.txt
-          
-          echo ">>> ERREURS CRITIQUES :" >> crash_report.txt
-          # On cherche les lignes contenant "error:" et on prend les 2 lignes d'avant et d'après
-          grep -C 2 "error:" ios/full_build.log >> crash_report.txt || echo "Pas d'erreur explicite 'error:' trouvée." >> crash_report.txt
-          
-          echo "" >> crash_report.txt
-          echo ">>> ÉCHEC DU BUILD :" >> crash_report.txt
-          grep "BUILD FAILED" ios/full_build.log >> crash_report.txt || echo "" >> crash_report.txt
-          
-          echo "" >> crash_report.txt
-          echo ">>> PROBLÈMES DE SIGNATURE :" >> crash_report.txt
-          grep "Signing" ios/full_build.log >> crash_report.txt || echo "" >> crash_report.txt
-
-      - name: 📤 Upload IPA (Si succès)
-        if: success()
+      - name: 📤 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: flowos-ipa
           path: FlowOS.ipa
-
-      - name: 📤 Upload Crash Report (Si échec)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ERROR-REPORT
-          path: crash_report.txt
