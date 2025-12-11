@@ -1,4 +1,4 @@
-name: Build iOS IPA (V28 - Clean Architecture)
+name: Build iOS IPA (V29 - Auto Assets)
 
 on:
   workflow_dispatch:
@@ -19,22 +19,19 @@ jobs:
 
       - name: 🧹 Clean & Force Package.json
         run: |
-          # On supprime tout ce qui pourrait causer des conflits
           rm -rf node_modules ios android .expo package-lock.json yarn.lock
           
-          # ON ÉCRIT UN FICHIER DE CONFIGURATION NEUF ET PARFAIT
-          # Cela force React 18.2.0 et React Native 0.74.5
+          # Configs de base
+          echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
+          echo "const { getDefaultConfig } = require('expo/metro-config'); const config = getDefaultConfig(__dirname); module.exports = config;" > metro.config.js
+          
+          # package.json STABLE
           cat <<EOT > package.json
           {
             "name": "flowos",
             "version": "1.0.0",
             "main": "index.js",
-            "scripts": {
-              "start": "expo start",
-              "android": "expo run:android",
-              "ios": "expo run:ios",
-              "web": "expo start --web"
-            },
+            "scripts": { "start": "expo start", "ios": "expo run:ios" },
             "dependencies": {
               "expo": "^51.0.0",
               "react": "18.2.0",
@@ -66,11 +63,7 @@ jobs:
           }
           EOT
           
-          # On recrée les configs Babel et Metro
-          echo "module.exports = function(api) { api.cache(true); return { presets: ['babel-preset-expo'], plugins: ['react-native-reanimated/plugin'], }; };" > babel.config.js
-          echo "const { getDefaultConfig } = require('expo/metro-config'); const config = getDefaultConfig(__dirname); module.exports = config;" > metro.config.js
-          
-          # Config App.json
+          # app.json avec chemins valides
           cat <<EOT > app.json
           {
             "expo": {
@@ -85,25 +78,32 @@ jobs:
                 "resizeMode": "contain",
                 "backgroundColor": "#ffffff"
               },
-              "assetBundlePatterns": ["**/*"],
               "ios": {
                 "supportsTablet": true,
-                "bundleIdentifier": "com.flowos.final.v28"
+                "bundleIdentifier": "com.flowos.final.v29"
               }
             }
           }
           EOT
 
-      - name: 📦 Install Dependencies (Clean)
+      - name: 🎨 Create Fake Assets (Le Correctif)
+        run: |
+          # On crée le dossier et on télécharge des placeholders
+          mkdir -p assets
+          curl -o assets/icon.png https://dummyimage.com/1024x1024/000/fff.png&text=FlowOS
+          curl -o assets/splash.png https://dummyimage.com/1242x2436/fff/000.png&text=Loading
+          curl -o assets/adaptive-icon.png https://dummyimage.com/1024x1024/000/fff.png&text=FlowOS
+          curl -o assets/favicon.png https://dummyimage.com/48x48/000/fff.png
+
+      - name: 📦 Install Dependencies
         run: |
           npm install -g expo-cli
-          # --legacy-peer-deps empêche npm de bloquer sur des avertissements mineurs
           npm install --legacy-peer-deps
 
       - name: 🚀 Prebuild
         run: npx expo prebuild --platform ios --clean
 
-      - name: 📦 Manual Bundle JS (Verification)
+      - name: 📦 Manual Bundle JS
         run: |
           mkdir -p ios/assets
           npx react-native bundle \
@@ -117,6 +117,7 @@ jobs:
       - name: 💉 Disable Signing
         run: |
           cd ios
+          # Injection Podfile
           sed -i '' '/post_install do |installer|/a\
             installer.pods_project.targets.each do |target|\
               target.build_configurations.each do |config|\
@@ -128,13 +129,13 @@ jobs:
             end\
           ' Podfile
           
+          # Nettoyage Projet
           find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g'
           find . -name "project.pbxproj" -print0 | xargs -0 sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g'
 
       - name: 🥥 Install Pods
         run: |
           cd ios
-          # On force la vieille architecture (stable)
           RCT_NEW_ARCH_ENABLED=0 pod install --repo-update
 
       - name: 🔨 Build Native App
@@ -181,7 +182,7 @@ jobs:
       - name: 🔍 Debug Report
         if: failure()
         run: |
-          echo "=== RAPPORT V28 ===" > crash_report.txt
+          echo "=== RAPPORT V29 ===" > crash_report.txt
           tail -n 100 ios/raw_build.log >> crash_report.txt || echo "Pas de log" >> crash_report.txt
 
       - name: 📤 Upload Report
